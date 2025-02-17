@@ -1,5 +1,5 @@
 {
-  "name": "starter-node-hono-postgres",
+  "name": "starter-node-hono-lucia-postgres",
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
