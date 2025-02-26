@@ -2,7 +2,7 @@
   "name": "starter-node-hono-lucia-postgres",
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
+    "dev": "pnpm db:generate-sql && drizzle-kit migrate && tsx watch src/index.ts",
     "db:schema-update": "drizzle-kit push",
     "db:generate-sql": "drizzle-kit generate",
     "db:sql-update": "drizzle-kit migrate",
@@ -11,6 +11,9 @@
   "dependencies": {
     "@hono/node-server": "^1.13.7",
     "@lucia-auth/adapter-postgresql": "^3.1.2",
+    "@oslojs/crypto": "^1.0.1",
+    "@oslojs/encoding": "^1.1.0",
+    "arctic": "^3.3.0",
     "dotenv": "^16.4.7",
     "drizzle-orm": "^0.38.4",
     "hono": "^4.6.17",
