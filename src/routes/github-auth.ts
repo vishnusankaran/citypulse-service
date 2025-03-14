@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { getCookie, setCookie } from 'hono/cookie';
+import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { HTTPException } from 'hono/http-exception';
 import { generateState, OAuth2RequestError } from 'arctic';
 import { eq } from 'drizzle-orm';
@@ -10,17 +10,23 @@ import {
   createSession,
   generateSessionToken,
   invalidateSession,
+  SESSION_COOKIE_NAME,
 } from '../lib/session.ts';
 import github from '../lib/providers/github.ts';
-import {
-  deleteSessionTokenCookie,
-  setSessionTokenCookie,
-} from '../lib/cookie.ts';
+import { deleteSessionTokenCookie } from '../lib/cookie.ts';
 import type { AuthContext, GithubProfile } from '../types/index.ts';
 
 const githubAuth = new Hono<AuthContext>()
   .get('/authorize', async (c) => {
     const state = generateState();
+
+    setCookie(c, 'referer', c.req.header('referer') || '', {
+      path: '/',
+      httpOnly: true,
+      maxAge: 60 * 10,
+      secure: true,
+      sameSite: 'lax',
+    });
 
     const scopes = ['user:email'];
     const url = github.createAuthorizationURL(state, scopes);
@@ -28,7 +34,7 @@ const githubAuth = new Hono<AuthContext>()
       path: '/',
       httpOnly: true,
       maxAge: 60 * 10,
-      secure: process.env.NODE_ENV === 'production',
+      secure: true,
       sameSite: 'lax',
     });
 
@@ -53,7 +59,7 @@ const githubAuth = new Hono<AuthContext>()
 
       const githubUser: GithubProfile = await githubUserResponse.json();
 
-      console.log('Github User', githubUser);
+      c.set('profile', githubUser);
 
       const [existingUser] = await db
         .select()
@@ -61,30 +67,40 @@ const githubAuth = new Hono<AuthContext>()
         .where(eq(userTable.id, Number(githubUser.id)));
 
       console.log('Existing User', existingUser);
+      const referer = getCookie(c, 'referer');
+      let redirectUrl = referer;
+      let sessionToken;
 
       if (existingUser) {
-        const sessionToken = generateSessionToken();
+        sessionToken = generateSessionToken();
         console.log('token at existingUser', sessionToken);
-        const session = await createSession(sessionToken, existingUser.id);
-        setSessionTokenCookie(c, sessionToken, session.expiresAt);
+        await createSession(sessionToken, existingUser.id);
 
-        return c.redirect('/');
+        console.log('process.env.NODE_ENV', process.env.NODE_ENV);
       } else {
         const [user] = await db
           .insert(userTable)
           .values({
             id: githubUser.id.toString(),
-            name: githubUser.name,
+            data: githubUser,
+            type: 'github',
           })
           .returning();
 
-        const sessionToken = generateSessionToken();
-        console.log('token at !existingUser', sessionToken);
-        const session = await createSession(sessionToken, user.id);
-        setSessionTokenCookie(c, sessionToken, session.expiresAt);
+        sessionToken = generateSessionToken();
+        await createSession(sessionToken, user.id);
       }
 
-      return c.redirect('/');
+      setCookie(c, SESSION_COOKIE_NAME, sessionToken, {
+        path: '/',
+        httpOnly: process.env.NODE_ENV === 'production',
+        maxAge: 60 * 10,
+        secure: true,
+        sameSite: 'None',
+        domain: 'project.localhost',
+      });
+
+      return c.redirect(redirectUrl || '');
     } catch (e) {
       console.log(e);
       if (e instanceof OAuth2RequestError) {
@@ -95,12 +111,28 @@ const githubAuth = new Hono<AuthContext>()
   })
   .get('/logout', async (c) => {
     const session = c.get('session');
+
+    deleteCookie(c, 'github_oauth_state', {
+      path: '/',
+      secure: true,
+    });
+
+    deleteCookie(c, 'referer', {
+      path: '/',
+      secure: true,
+    });
+
+    deleteCookie(c, SESSION_COOKIE_NAME, {
+      path: '/',
+      secure: true,
+      domain: 'project.localhost',
+    });
+
     if (!session) return c.newResponse('unauthorized', 401);
 
     await invalidateSession(session.id);
-    deleteSessionTokenCookie(c);
 
-    return c.redirect('/');
+    return c.json({ data: {} });
   });
 
 export default githubAuth;

@@ -8,6 +8,20 @@
       "when": 1740401172520,
       "tag": "0000_low_nuke",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1741604043056,
+      "tag": "0001_glorious_tomas",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1741604080224,
+      "tag": "0002_acoustic_franklin_richards",
+      "breakpoints": true
     }
   ]
 }

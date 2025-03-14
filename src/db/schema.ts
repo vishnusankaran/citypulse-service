@@ -1,8 +1,17 @@
-import { pgTable, serial, text, integer, timestamp } from 'drizzle-orm/pg-core';
+import {
+  pgTable,
+  serial,
+  text,
+  integer,
+  timestamp,
+  json,
+} from 'drizzle-orm/pg-core';
 import type { InferSelectModel } from 'drizzle-orm';
 
 export const userTable = pgTable('user', {
   id: serial('id').primaryKey(),
+  data: json('user_data'),
+  type: text('type'),
 });
 
 export const sessionTable = pgTable('session', {

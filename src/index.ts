@@ -1,69 +1,32 @@
 import { Hono } from 'hono';
-import { serveStatic } from 'hono/serve-static';
 import { serve } from '@hono/node-server';
-import { eq } from 'drizzle-orm';
-
-import fs from 'fs';
-import { fileURLToPath } from 'url';
-import path, { dirname } from 'path';
+import { cors } from 'hono/cors';
 
 import 'dotenv/config';
 
-import { db, schema } from './db/index.ts';
+import corsMiddleware from './middleware/cors.ts';
 import authentication from './middleware/authentication.ts';
+import authorization from './middleware/authorization.ts';
 import type { AuthContext } from './types/index.ts';
 import githubAuth from './routes/github-auth.ts';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-
-const { userTable } = schema;
+import profile from './routes/profile.ts';
+import { createMiddleware } from 'hono/factory';
 
 const app = new Hono<AuthContext>();
 
-app.use('*', authentication);
-
-app.get('/', (c) => {
-  return c.redirect('/login');
+app.use('*', (c, next) => {
+  console.log('About to run cors middleware');
+  return corsMiddleware(c, next);
 });
 
-app.get(
-  '/login',
-  serveStatic({
-    root: './',
-    getContent: async () => {
-      return fs.readFileSync(
-        path.join(__dirname, 'static/login.html'),
-        'utf-8'
-      );
-    },
-  })
-);
+app.use('*', (c, next) => {
+  console.log('About to run authentication middleware');
+  return authentication(c, next);
+});
 
 app.route('/github', githubAuth);
 
-app.get('/user/:id', async (c) => {
-  const id = Number(c.req.param('id'));
-
-  const loggedInUser = c.get('user');
-
-  if (loggedInUser?.id === id) {
-    const [user] = await db
-      .select()
-      .from(userTable)
-      .where(eq(userTable?.id, id))
-      .execute();
-
-    return c.json(user);
-  } else {
-    return c.json({
-      error: {
-        code: 'Access Error',
-        message: 'Only profile data for own user is available',
-      },
-    });
-  }
-});
+app.get('/profile', profile);
 
 const port = 3000;
 console.log(`Server is running on http://localhost:${port}`);

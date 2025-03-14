@@ -4,6 +4,7 @@
   "scripts": {
     "dev": "pnpm db:generate-sql && drizzle-kit migrate && tsx watch src/index.ts",
     "db:schema-update": "drizzle-kit push",
+    "db:gen-mig": "drizzle-kit generate && drizzle-kit migrate",
     "db:generate-sql": "drizzle-kit generate",
     "db:sql-update": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio"
@@ -16,7 +17,7 @@
     "arctic": "^3.3.0",
     "dotenv": "^16.4.7",
     "drizzle-orm": "^0.38.4",
-    "hono": "^4.6.17",
+    "hono": "^4.7.2",
     "lucia": "^3.2.2",
     "pg": "^8.13.1"
   },
