@@ -1,5 +1,7 @@
 FROM node:18-alpine
 
+ENV NODE_OPTIONS=--max-old-space-size=2048
+
 # Install pnpm
 RUN npm i -g pnpm
 
