@@ -2,10 +2,10 @@ import { Hono } from 'hono';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { HTTPException } from 'hono/http-exception';
 import { generateState, OAuth2RequestError } from 'arctic';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 
 import { db } from '../db/index.ts';
-import { userTable } from '../db/schema.ts';
+import { userTable } from '../db/schema/user.ts';
 import {
   createSession,
   generateSessionToken,
@@ -14,28 +14,34 @@ import {
 } from '../lib/session.ts';
 import github from '../lib/providers/github.ts';
 import { deleteSessionTokenCookie } from '../lib/cookie.ts';
+import { session as sessionMiddleware } from '../middleware/session.ts';
 import type { AuthContext, GithubProfile } from '../types/index.ts';
 
 const githubAuth = new Hono<AuthContext>()
   .get('/authorize', async (c) => {
     const state = generateState();
+    const referer = c.req.header('referer');
 
-    setCookie(c, 'referer', c.req.header('referer') || '', {
-      path: '/',
-      httpOnly: true,
-      maxAge: 60 * 10,
-      secure: true,
-      sameSite: 'lax',
+    if (referer) {
+      setCookie(c, 'referer', referer, {
+        path: '/',
+        httpOnly: true,
+        maxAge: 60 * 10, // 10 minutes
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'Lax',
+      });
+    }
+
+    const url = github.createAuthorizationURL(state, {
+      scopes: ['user:email', 'repo', 'read:org'],
     });
 
-    const scopes = ['user:email'];
-    const url = github.createAuthorizationURL(state, scopes);
     setCookie(c, 'github_oauth_state', state, {
       path: '/',
       httpOnly: true,
-      maxAge: 60 * 10,
-      secure: true,
-      sameSite: 'lax',
+      maxAge: 60 * 10, // 10 minutes
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'Lax',
     });
 
     return c.redirect(url.toString());
@@ -43,96 +49,110 @@ const githubAuth = new Hono<AuthContext>()
   .get('/callback', async (c) => {
     const storedState = getCookie(c, 'github_oauth_state');
     const state = c.req.query('state');
-    const code = c.req.query('code') as string;
-    console.log('github_oauth_state', state, storedState);
-    // validate state
-    if (code === null || storedState === null || state !== storedState) {
-      console.log('github_oauth_state', state, storedState);
+    const code = c.req.query('code');
+
+    if (!code || !storedState || state !== storedState) {
       throw new HTTPException(400, { message: 'Invalid request' });
     }
-    try {
-      const tokens = await github.validateAuthorizationCode(code);
 
+    try {
+      const githubTokens = await github.validateAuthorizationCode(code);
       const githubUserResponse = await fetch('https://api.github.com/user', {
-        headers: { Authorization: `Bearer ${tokens.accessToken()}` },
+        headers: {
+          Authorization: `Bearer ${githubTokens.accessToken()}`,
+        },
       });
 
       const githubUser: GithubProfile = await githubUserResponse.json();
 
-      c.set('profile', githubUser);
+      if (!githubUser.email) {
+        const emailsResponse = await fetch(
+          'https://api.github.com/user/emails',
+          {
+            headers: {
+              Authorization: `Bearer ${githubTokens.accessToken()}`,
+            },
+          }
+        );
+        if (emailsResponse.ok) {
+          const emails: {
+            email: string;
+            primary: boolean;
+            verified: boolean;
+          }[] = await emailsResponse.json();
+          const primaryEmail = emails.find((e) => e.primary && e.verified);
+          if (primaryEmail) {
+            githubUser.email = primaryEmail.email;
+          }
+        }
+      }
 
       const [existingUser] = await db
         .select()
         .from(userTable)
-        .where(eq(userTable.id, Number(githubUser.id)));
+        .where(sql`${userTable.data}->>'id' = ${githubUser.id.toString()}`);
 
-      console.log('Existing User', existingUser);
-      const referer = getCookie(c, 'referer');
-      let redirectUrl = referer;
-      let sessionToken;
+      let userId: number;
 
       if (existingUser) {
-        sessionToken = generateSessionToken();
-        console.log('token at existingUser', sessionToken);
-        await createSession(sessionToken, existingUser.id);
-
-        console.log('process.env.NODE_ENV', process.env.NODE_ENV);
+        userId = existingUser.id;
+        // User exists, update their profile data
+        await db
+          .update(userTable)
+          .set({
+            data: githubUser,
+          })
+          .where(eq(userTable.id, userId));
       } else {
-        const [user] = await db
+        // User does not exist, create new user
+        const [newUser] = await db
           .insert(userTable)
           .values({
-            id: githubUser.id.toString(),
             data: githubUser,
             type: 'github',
           })
           .returning();
-
-        sessionToken = generateSessionToken();
-        await createSession(sessionToken, user.id);
+        userId = newUser.id;
       }
+
+      const sessionToken = generateSessionToken();
+      await createSession(sessionToken, userId);
 
       setCookie(c, SESSION_COOKIE_NAME, sessionToken, {
         path: '/',
-        httpOnly: process.env.NODE_ENV === 'production',
-        maxAge: 60 * 10,
-        secure: true,
-        sameSite: 'None',
-        domain: 'project.localhost',
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'Lax',
+        maxAge: 60 * 60 * 24 * 7, // 1 week
+        domain: process.env.DOMAIN, // Make sure this is set in your .env
       });
 
-      return c.redirect(redirectUrl || '');
+      const referer = getCookie(c, 'referer');
+      deleteCookie(c, 'referer'); // Clean up referer cookie
+      // Redirect to the original page or a default dashboard
+      return c.redirect(referer || '/');
     } catch (e) {
-      console.log(e);
+      console.error(e);
       if (e instanceof OAuth2RequestError) {
-        return c.body(null, { status: 400 });
+        return new Response(null, { status: 400 });
       }
-      return c.body(null, { status: 500 });
+      return new Response(null, { status: 500 });
     }
   })
+  .use(sessionMiddleware)
   .get('/logout', async (c) => {
-    const session = c.get('session');
+    const session = c.get('sessionData');
 
-    deleteCookie(c, 'github_oauth_state', {
-      path: '/',
-      secure: true,
-    });
+    // Always try to clear cookies even if there's no session
+    deleteCookie(c, 'github_oauth_state', { path: '/', secure: true });
+    deleteCookie(c, 'referer', { path: '/', secure: true });
+    deleteSessionTokenCookie(c); // Use the helper from lib/cookie
 
-    deleteCookie(c, 'referer', {
-      path: '/',
-      secure: true,
-    });
+    if (session) {
+      await invalidateSession(session.id);
+    }
 
-    deleteCookie(c, SESSION_COOKIE_NAME, {
-      path: '/',
-      secure: true,
-      domain: 'project.localhost',
-    });
-
-    if (!session) return c.newResponse('unauthorized', 401);
-
-    await invalidateSession(session.id);
-
-    return c.json({ data: {} });
+    return c.json({ message: 'Logged out' });
   });
 
 export default githubAuth;

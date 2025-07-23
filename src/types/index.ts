@@ -1,5 +1,5 @@
 import type { Env } from 'hono';
-import type { Session, User } from '../db/schema.ts';
+import type { Session, User } from '../db/schema/user.ts';
 
 export interface GithubProfile {
   name: string;

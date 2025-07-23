@@ -5,7 +5,7 @@ import {
 } from '@oslojs/encoding';
 import { sha256 } from '@oslojs/crypto/sha2';
 
-import type { User, Session } from '../db/schema.ts';
+import type { User, Session } from '../db/schema/user.ts';
 import { db, schema } from '../db/index.ts';
 
 const { userTable, sessionTable } = schema;
